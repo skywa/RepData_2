@@ -1,0 +1,188 @@
+---
+title: 'Severe Weather Health and Economic Effects (Reproducible Research: Peer Assessment 2)'
+output:
+  html_document:
+    keep_md: yes
+  pdf_document: default
+---
+
+##Synopsis
+
+In this report, we examine extreme weather events for their life and economic costs. Through National Oceanic and Atmospheric Administration's (NOAA) storm database, we can see which major storm and weather events cause the most damage to property and crops and the most fatalities and injuries.
+
+The most dangerous events to life and injuries were tornadoes, heat, thunderstorms, floods, and winter weather.
+
+The most costly events to the economy were hurricanes, floods, tornadoes, storm surges, and hail.
+
+Tornadoes, hurricanes, and flooding were in the top five for each factor.
+
+##Data Processing
+
+```{r libraries,warning=FALSE,message=FALSE}
+library(R.utils)
+library(data.table)
+library(ggplot2)
+library(quantmod)
+library(RCurl)
+library(bitops)
+```
+
+First, we obtain the data from the [course website](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2), with additional information [here](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf) and answers to [FAQ](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2FNCDC%20Storm%20Events-FAQ%20Page.pdf).
+```{r data_acquisition,cache = TRUE,eval=FALSE}
+download.file("http://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2", destfile="repdata-data-StormData.csv.bz2")
+
+bunzip2("repdata-data-StormData.csv.bz2", overwrite=TRUE, remove=FALSE)
+```
+
+Now, assign the newly created *.csv file to a data frame
+```{r data,cache = TRUE}
+data <- read.csv("repdata-data-StormData.csv")
+```
+
+Explore the data frame
+```{r}
+dim(data)
+head(data, n=4)
+str(data)
+```
+
+Let's see how many events occur each year
+```{r}
+data$BGN_DATE2 <- as.Date(data$BGN_DATE, format="%m/%d/%Y %H:%M:%S")
+data$year <- as.numeric(format(data$BGN_DATE2, "%Y"))
+
+Events_Year <- data.frame(summary(as.factor(data$year)))
+Events_Year
+```
+
+The exponents for damage need to be converted to numbers for easier use. This is done for property damage and crop damage.
+```{r warning=F}
+levels(data$PROPDMGEXP)
+data$PROPDMGEXP = as.character(data$PROPDMGEXP)
+data$PROPDMGEXP[data$PROPDMGEXP == "B"] = "9"
+data$PROPDMGEXP[data$PROPDMGEXP == "h"] = "2"
+data$PROPDMGEXP[data$PROPDMGEXP == "H"] = "2"
+data$PROPDMGEXP[data$PROPDMGEXP == "K"] = "3"
+data$PROPDMGEXP[data$PROPDMGEXP == "m"] = "6"
+data$PROPDMGEXP[data$PROPDMGEXP == "M"] = "6"
+data$PROPDMGEXP = as.numeric(data$PROPDMGEXP)
+data$PROPDMGEXP[is.na(data$PROPDMGEXP)] = 0
+data$PropDmgNum = data$PROPDMG * 10^data$PROPDMGEXP
+summary(data$PropDmgNum)
+
+levels(data$CROPDMGEXP)
+data$CROPDMGEXP = as.character(data$PROPDMGEXP)
+data$CROPDMGEXP[data$CROPDMGEXP == "B"] = "9"
+data$CROPDMGEXP[data$CROPDMGEXP == "K"] = "3"
+data$CROPDMGEXP[data$CROPDMGEXP == "K"] = "3"
+data$CROPDMGEXP[data$CROPDMGEXP == "m"] = "6"
+data$CROPDMGEXP[data$CROPDMGEXP == "M"] = "6"
+data$CROPDMGEXP = as.numeric(data$CROPDMGEXP)
+data$CROPDMGEXP[is.na(data$CROPDMGEXP)] = 0
+data$CropDmgNum = data$CROPDMG * 10^data$CROPDMGEXP
+summary(data$CropDmgNum)
+```
+
+Adjust cost values to 2011 dollars using the CPI for each year
+```{r, message=FALSE}
+#library(quantmod)
+getSymbols("CPIAUCSL", src='FRED')
+avg.cpi <- apply.yearly(CPIAUCSL, mean)
+cpi2011 <- as.data.frame(as.numeric(avg.cpi['2011']) / avg.cpi)
+cpi2011$year <- as.numeric(format(as.Date(rownames(cpi2011)), '%Y'))
+colnames(cpi2011)[1] <- 'conversion'
+head(cpi2011, n=3)
+
+data <- merge(data, cpi2011, by='year')
+```
+
+
+Some categories need to be merged, as naming conventions were not consistent.
+```{r}
+data$EVTYPECLEAN <- as.character(toupper(data$EVTYPE))
+data$EVTYPECLEAN[grep('+HURR+',data$EVTYPECLEAN)] <- "HURRICANE"
+data$EVTYPECLEAN[grep('+TORN+|+SPOUT+|+FUNNEL+',data$EVTYPECLEAN)] <- "TORNADO"
+data$EVTYPECLEAN[grep('+TSTM+|+THUN+|+WALL+',data$EVTYPECLEAN)] <- "THUNDERSTORM"
+data$EVTYPECLEAN[grep('+WND+|+WIND+|+BURST+|+GUST+',data$EVTYPECLEAN)] <- "WIND"
+data$EVTYPECLEAN[grep('+WET+|+RAIN+|+PRECIP+|+SHOWER+',data$EVTYPECLEAN)] <- "RAIN"
+data$EVTYPECLEAN[grep('+WINT+|+BLIZ+|+SNOW+|+FREEZ+|+FROST+|+ICE+|+GLA+|+SLEET+',data$EVTYPECLEAN)] <- "WINTER WEATHER"
+data$EVTYPECLEAN[grep('+COLD+|+HYPOTHERM+|+LOW TEMP+|+RECORD LOW+',data$EVTYPECLEAN)] <- "COLD"
+data$EVTYPECLEAN[grep('+HEAT+|HIGH TEMP+|+HOT+|RECORD HIGH+|+WARM+|+HYPERTHERM+',data$EVTYPECLEAN)] <- "HEAT"
+data$EVTYPECLEAN[grep('+CURRENT+',data$EVTYPECLEAN)] <- "CURRENTS"
+data$EVTYPECLEAN[grep('+DRY+|+DRIEST+|+DROUGHT+',data$EVTYPECLEAN)] <- "DROUGHT"
+data$EVTYPECLEAN[grep('+AVAL+',data$EVTYPECLEAN)] <- "AVALANCHE"
+data$EVTYPECLEAN[grep('+DAM+',data$EVTYPECLEAN)] <- "DAM"
+data$EVTYPECLEAN[grep('+DUST+',data$EVTYPECLEAN)] <- "DUST"
+data$EVTYPECLEAN[grep('+ERO+',data$EVTYPECLEAN)] <- "EROSION"
+data$EVTYPECLEAN[grep('+FIRE+|+SMOKE+',data$EVTYPECLEAN,data$EVTYPECLEAN)] <- "FIRE"
+data$EVTYPECLEAN[grep('+FLOOD+',data$EVTYPECLEAN,data$EVTYPECLEAN)] <- "FLOOD"
+data$EVTYPECLEAN[grep('+FOG+',data$EVTYPECLEAN,data$EVTYPECLEAN)] <- "FOG"
+data$EVTYPECLEAN[grep('+HAIL+',data$EVTYPECLEAN,data$EVTYPECLEAN)] <- "HAIL"
+data$EVTYPECLEAN[grep('+ICE+|+ICY+',data$EVTYPECLEAN)] <- "ICE"
+data$EVTYPECLEAN[grep('+SLIDE+|+SLUMP+|+SLIDE+',data$EVTYPECLEAN)] <- "LANDSLIDE"
+data$EVTYPECLEAN[grep('+LIGHT+|+LIGN+',data$EVTYPECLEAN,data$EVTYPECLEAN)] <- "LIGHTNING"
+data$EVTYPECLEAN[grep('+SURF+|+SWELLS+|+WAVE+|+SEAS+|+SQUALL+',data$EVTYPECLEAN)] <- "SWELLS"
+data$EVTYPECLEAN[grep('+SURGE+',data$EVTYPECLEAN)] <- "STORM SURGE"
+data$EVTYPECLEAN[grep('+TIDE+|+TIDES+',data$EVTYPECLEAN)] <- "TIDE"
+data$EVTYPECLEAN[grep('+TROP+',data$EVTYPECLEAN)] <- "TROPICAL STORM"
+data$EVTYPECLEAN[grep('+VOLC+',data$EVTYPECLEAN)] <- "VOLCANO"
+data$EVTYPECLEAN <- as.factor(data$EVTYPECLEAN)
+```
+
+#Results
+
+###Severe weather event effects on life (fatalities and injuries)
+
+For the effect on life, we add the fatalities and the injuries and look at the 30 worst event types. A logarithmic axis is used to better see the event types with fewer fatalities and injuries.
+```{r}
+data$Life <- data$FATALITIES + data$INJURIES
+summary(data$Life)
+LIFE <- as.data.frame.table(tail(sort(tapply(data$Life, data$EVTYPECLEAN, sum)), n=30))
+colnames(LIFE) <- c("EventType", "Fatalities.Injuries")
+LIFE$log10 <- log10(LIFE$Fatalities.Injuries)
+colnames(LIFE) <- c("EventType", "Fatalities.Injuries", "log10")
+tail(LIFE, n=10)
+
+p1 <- qplot(LIFE$EventType, LIFE$log10) +
+      geom_bar(stat="identity") + 
+      labs(x="Event Type", y="Fatalities/Injuries\n (log10)") +
+      theme(axis.text.x = element_text(angle=50, hjust=1)) 
+p1
+```
+
+###Severe weather event effects on economic costs to property and crops
+
+For total damage, property and crop damage is combined and the costliest 30 event types are examined. The most damaging events were much costlier less damaging events, so the plot is displayed with a logarithmic axis.
+```{r}
+data$TotalDmg <- (data$PropDmgNum + data$CropDmgNum) * data$conversion
+summary(data$TotalDmg)
+DAMAGE <- as.data.frame.table(tail(sort(tapply(data$TotalDmg, data$EVTYPECLEAN, sum)), n=30))
+colnames(DAMAGE) <- c("EventType", "Cost")
+DAMAGE$log10 <- log10(DAMAGE$Cost)
+colnames(DAMAGE) <- c("EventType", "Cost", "log10")
+tail(DAMAGE,n=10)
+
+p2 <- qplot(DAMAGE$EventType, DAMAGE$log10) +
+      geom_bar(stat="identity") + 
+      labs(x="Event Type", y="Property/Crop Damage (2011 USD$)\n (log10)") +
+      theme(axis.text.x = element_text(angle=50, hjust=1)) 
+p2
+```
+
+If we plot the effect of life (fatalities and injuries) versus the effect on economics (property and crop damage), we can examine which event types are worse overall for the two factors.
+```{r}
+EVENTS <- merge(LIFE,DAMAGE,by="EventType")
+colnames(EVENTS) <- c("EventType", "Deaths.Inj", "log10.Deaths.Inj", "Cost", "log10.Cost")
+p3 <- ggplot(data=EVENTS, 
+             aes(x=log10.Deaths.Inj, y=log10.Cost, 
+                 label = EventType)) +
+      geom_point() +
+      ggtitle("Dangerous & Costly Severe Weather Events") +
+      labs(x="Fatalities/Injuries\n (log10)",
+       y="Property/Crop Damage (2011 USD$)\n (log10)") + 
+      geom_text(vjust=-.5, hjust=0, size=3) +
+      ylim(6, 13) + xlim(0,5.5)
+p3
+```
+
+From this last plot, we can see that since 1951, Tornados have caused the most deaths and injuries and hurricanes have caused the most property and crop damage. Flooding is also bad, causing high death rates and injuries and damages. Other weather events that have high costs to life and property are thunderstorms, winter weather, wind, hail, fire, and lightning.
